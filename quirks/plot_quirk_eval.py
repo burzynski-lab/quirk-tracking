@@ -67,9 +67,9 @@ def main():
             sys.exit(1)
 
         # regression heads (query i <-> truth particle i)
-        p_fom = get(g, "preds/final/track_fom/track_fom_log10_f_over_m")
+        p_fom = get(g, "preds/final/track_fom/track_log10_f_over_m")
         t_fom = get(g, "targets/particle_log10_f_over_m")
-        p_n = np.stack([get(g, f"preds/final/track_plane/track_plane_n{c}") for c in "xyz"], axis=-1)
+        p_n = np.stack([get(g, f"preds/final/track_plane/track_n{c}") for c in "xyz"], axis=-1)
         t_n = np.stack([get(g, f"targets/particle_n{c}") for c in "xyz"], axis=-1)
 
         both = true_valid & pred_valid
