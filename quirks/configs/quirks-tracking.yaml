@@ -187,8 +187,8 @@ model:
           num_layers: 8
           dim: *dim
           attn_type: flash
-          window_size: 512
-          window_wrap: true
+          window_size: null
+          window_wrap: false
           hybrid_norm: true
           norm: CustomLayerNorm
           dense_kwargs: {activation: SwiGLU}
