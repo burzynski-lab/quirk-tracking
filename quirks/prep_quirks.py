@@ -76,6 +76,10 @@ def main():
             "lambda_ev": args.lam,
             "log10_f_over_m": np.log10(args.lam**2 / args.mass),
         })
+        # production vertex (beamspot-smeared; needed to anchor analytic
+        # trajectory overlays -- z spread is tens of mm)
+        for c in "xyz":
+            parts[f"v{c}"] = np.asarray(br[f"Part_v{c}"][ev])[keep]
 
         # hits
         sp = np.stack([np.asarray(br["SPx"][ev]), np.asarray(br["SPy"][ev]),

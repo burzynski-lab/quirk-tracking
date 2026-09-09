@@ -32,9 +32,60 @@ import pandas as pd
 QCOLORS = ["tab:blue", "tab:orange", "tab:green", "tab:red",
            "tab:purple", "tab:brown", "tab:pink", "tab:olive"]
 
+HBARC_GEV_MM = 1.9732705e-13  # hbar*c in GeV*mm
+
 
 def get(grp, path):
     return np.asarray(grp[path])[0]  # stored with leading batch dim of 1
+
+
+def quirk_trajectories(parts, n_period=2.0, n_samp=4000):
+    """Analytic lab-frame trajectories [mm] for the quirk pair.
+
+    Constant string force F = Lambda^2 along the pair axis makes the rest-frame
+    motion exactly integrable (see Generation/tools/quirk_trajectory.py); each
+    sampled rest-frame 4-position is boosted to the lab and anchored at the
+    production vertex. No B field, no dE/dx -- the overlay is the string-only
+    zig-zag, so expect real hits to curl away from it slowly.
+    Returns a list of (N,3) arrays, one per quirk, or [] if not computable.
+    """
+    q = parts[parts["is_quirk"].astype(bool)]
+    if len(q) != 2 or not {"vx", "vy", "vz"}.issubset(parts.columns):
+        return []
+    m = float(q["mass_gev"].iloc[0])
+    lam = float(q["lambda_ev"].iloc[0])
+    p4 = [np.array([r.px, r.py, r.pz, np.sqrt(r.px**2 + r.py**2 + r.pz**2 + m**2)])
+          for r in q.itertuples()]
+    P = p4[0] + p4[1]
+    M2 = max(P[3] ** 2 - P[:3] @ P[:3], 1e-12)
+    beta = P[:3] / P[3]
+    b2 = beta @ beta
+    gam = 1.0 / np.sqrt(max(1.0 - b2, 1e-12))
+
+    out = []
+    for pq in p4:
+        # boost quirk momentum to the pair rest frame
+        bp = beta @ pq[:3]
+        k = (gam - 1.0) / b2 if b2 > 0 else 0.0
+        prest = pq[:3] + (k * bp - gam * pq[3]) * beta
+        p0 = np.linalg.norm(prest)
+        if p0 <= 0:
+            return []
+        nhat = prest / p0
+        F = (lam * 1e-9) ** 2                       # GeV^2
+        tau = 4.0 * p0 / F                          # full period, GeV^-1
+        E0 = np.sqrt(p0**2 + m**2)
+        t = np.linspace(0.0, n_period * tau, n_samp)
+        ph = (t % tau) * F                          # 0 .. 4 p0
+        pmag = np.where(ph <= 2 * p0, p0 - ph, ph - 3 * p0)
+        xmag = np.sign(np.where(ph <= 2 * p0, 1.0, -1.0)) * (E0 - np.sqrt(pmag**2 + m**2)) / F
+        X = xmag[:, None] * nhat[None, :]           # rest-frame position
+        # boost (X, t) back to the lab
+        bx = X @ beta
+        lab = X + (k * bx + gam * t)[:, None] * beta[None, :] if b2 > 0 else X
+        v = q[["vx", "vy", "vz"]].iloc[0].to_numpy(dtype=float)
+        out.append(lab * HBARC_GEV_MM + v)
+    return out
 
 
 def main():
@@ -106,9 +157,15 @@ def main():
         r = np.hypot(x, y)
         qids = parts[parts.get("is_quirk", pd.Series(True, index=parts.index)).astype(bool)]["particle_id"].to_numpy()
 
+        trajs = quirk_trajectories(parts)
+
         fig, axs = plt.subplots(1, 2, figsize=(14, 6.5))
         for ax, (a, b, la, lb) in zip(axs, [(x, y, "x [mm]", "y [mm]"), (z, r, "z [mm]", "r [mm]")]):
             ax.scatter(a, b, s=3, c="0.8", label="all SPs", rasterized=True)
+            for j, tr in enumerate(trajs):
+                ta, tb = (tr[:, 0], tr[:, 1]) if la.startswith("x") else (tr[:, 2], np.hypot(tr[:, 0], tr[:, 1]))
+                ax.plot(ta, tb, color=QCOLORS[j % len(QCOLORS)], lw=0.7, alpha=0.5, zorder=1,
+                        label=f"analytic quirk {j + 1}" if la.startswith("x") else None)
             for j, q in enumerate(qids):
                 m = hits.particle_id.to_numpy() == q
                 ax.scatter(a[m], b[m], s=70, facecolors="none",
@@ -120,6 +177,10 @@ def main():
                            label=f"pred q{i} ({m.sum()} hits)")
             ax.set_xlabel(la)
             ax.set_ylabel(lb)
+            # keep the axes on the hits; the analytic path runs far outside
+            pad_a, pad_b = 0.1 * (a.max() - a.min() + 1), 0.1 * (b.max() - b.min() + 1)
+            ax.set_xlim(a.min() - pad_a, a.max() + pad_a)
+            ax.set_ylim(b.min() - pad_b, b.max() + pad_b)
         axs[0].set_aspect("equal")
         h, lab = axs[0].get_legend_handles_labels()
         fig.legend(h, lab, loc="upper center", ncol=3, fontsize=8, frameon=False)
