@@ -1,0 +1,3 @@
+[submodule "hepattn"]
+	path = hepattn
+	url = https://github.com/burzynski-lab/hepattn.git

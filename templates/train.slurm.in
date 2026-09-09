@@ -1,0 +1,22 @@
+#!/bin/bash
+#SBATCH --job-name=quirk-train
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=100G
+#SBATCH --time=24:00:00
+#SBATCH --output=@SCRATCH@/logs/train_%j.out
+QT=@QT@
+S=@SCRATCH@
+EXTRA=${EXTRA:-}   # e.g. EXTRA="--trainer.fast_dev_run 10" for a smoke test
+export APPTAINER_TMPDIR=/tmp/$USER-apptainer; mkdir -p $APPTAINER_TMPDIR
+apptainer exec --nv --bind /ourdisk,/home \
+  --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
+  $S/containers/pixi.sif bash -c "
+    cd $QT/hepattn
+    pixi run python src/hepattn/experiments/trackml/run_tracking.py fit \
+      --config $QT/quirks/configs/quirks-tracking.yaml \
+      --data.train_dir $S/data/m100/train --data.val_dir $S/data/m100/val --data.test_dir $S/data/m100/test \
+      --trainer.default_root_dir $S/logs $EXTRA
+  "
+echo TRAINDONE

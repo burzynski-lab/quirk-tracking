@@ -1,0 +1,28 @@
+#!/bin/bash
+#SBATCH --job-name=quirk-prep
+#SBATCH --partition=sooner_test
+#SBATCH --account=general
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+#SBATCH --time=12:00:00
+#SBATCH --output=@SCRATCH@/logs/prep_%j.out
+# GNN4ITk dumps -> hepattn parquet. Edit DUMPDIR if your dumps live elsewhere.
+QT=@QT@
+S=@SCRATCH@
+DUMPDIR=${DUMPDIR:-/ourdisk/hpc/ouhep/jburzyns/dont_archive/Quirks/chain/gnndump}
+export APPTAINER_TMPDIR=/tmp/$USER-apptainer; mkdir -p $APPTAINER_TMPDIR
+run() { apptainer exec --bind /ourdisk,/home --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
+        $S/containers/pixi.sif bash -c "cd $QT/hepattn && pixi run python $*"; }
+off=0
+for l in 100 167 278 464 774 1292 2154 3594 5995 10000; do
+  files=($DUMPDIR/m100.L$l/*.root); n=${#files[@]}
+  for i in "${!files[@]}"; do
+    if   (( i >= n-2 )); then split=test
+    elif (( i >= n-4 )); then split=val
+    else split=train; fi
+    run $QT/quirks/prep_quirks.py "${files[$i]}" $S/data/m100/$split --mass 100 --lam $l --quirks-only --offset $off
+    off=$((off+1000))
+  done
+done
+for s in train val test; do echo "$s: $(ls $S/data/m100/$s/*-parts.parquet 2>/dev/null | wc -l) events"; done
+echo PREPDONE
