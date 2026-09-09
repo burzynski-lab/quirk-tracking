@@ -39,7 +39,7 @@ def get(grp, path):
     return np.asarray(grp[path])[0]  # stored with leading batch dim of 1
 
 
-def quirk_trajectories(parts, n_period=2.0, n_samp=4000):
+def quirk_trajectories(parts, n_period=4.0, n_samp=8000):
     """Analytic lab-frame trajectories [mm] for the quirk pair.
 
     Constant string force F = Lambda^2 along the pair axis makes the rest-frame
@@ -50,7 +50,10 @@ def quirk_trajectories(parts, n_period=2.0, n_samp=4000):
     Returns a list of (N,3) arrays, one per quirk, or [] if not computable.
     """
     q = parts[parts["is_quirk"].astype(bool)]
-    if len(q) != 2 or not {"vx", "vy", "vz"}.issubset(parts.columns):
+    if not {"vx", "vy", "vz"}.issubset(parts.columns):
+        print("  no vertex columns (old prep?) - trajectory overlay skipped")
+        return []
+    if len(q) != 2:
         return []
     m = float(q["mass_gev"].iloc[0])
     lam = float(q["lambda_ev"].iloc[0])
