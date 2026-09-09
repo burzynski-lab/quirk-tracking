@@ -35,6 +35,9 @@ def main():
     ap.add_argument("--mass", type=float, required=True, help="GeV")
     ap.add_argument("--lam", "--lambda", dest="lam", type=float, required=True, help="eV")
     ap.add_argument("--quirks-only", action="store_true")
+    ap.add_argument("--min-hits", type=int, default=3,
+                    help="skip events where no kept particle would survive the "
+                         "hepattn loader cuts (pt>5, |eta|<2.5, >= this many hits)")
     ap.add_argument("--events", type=int, default=-1)
     ap.add_argument("--offset", type=int, default=0,
                     help="event-number offset for unique names across files")
@@ -99,6 +102,17 @@ def main():
             "geta": np.asarray(br["CLglob_eta"][ev], dtype=np.float32)[cl1],
             "gphi": np.asarray(br["CLglob_phi"][ev], dtype=np.float32)[cl1],
         })
+
+        # skip events the hepattn loader would reject with "No particles
+        # remaining": every kept particle must fail pt>5 / |eta|<2.5 /
+        # min-hits for that to happen, so require at least one survivor
+        pt = np.hypot(px, py)
+        p3 = np.sqrt(px**2 + py**2 + pz**2)
+        eta = np.arctanh(np.clip(pz / np.maximum(p3, 1e-12), -1 + 1e-12, 1 - 1e-12))
+        counts = pd.Series(pid).value_counts()
+        nhits = np.array([counts.get(b, 0) for b in parts["particle_id"]])
+        if not ((pt > 5.0) & (np.abs(eta) < 2.5) & (nhits >= args.min_hits)).any():
+            continue
 
         # truth pair plane through the vertex (both quirks share it)
         iq = np.where(isq)[0][0]
