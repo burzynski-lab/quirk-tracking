@@ -262,13 +262,17 @@ model:
                 output_object: track
                 target_object: particle
                 dim: *dim
+                # ABLATION[mask-balance]: rebalanced against the all-null mask
+                # collapse - negatives down-weighted inside focal (null_weight
+                # is the per-hit negative-class weight), dice raised 2 -> 10.
+                # Matching costs keep the original balance.
                 losses:
-                  mask_dice: 2.0
+                  mask_dice: 10.0
                   mask_focal: 100.0
                 costs:
                   mask_dice: 2.0
                   mask_focal: 100.0
-                null_weight: 1.0
+                null_weight: 0.01
 
             - class_path: hepattn.models.task.IoUPredictionTask
               init_args:
