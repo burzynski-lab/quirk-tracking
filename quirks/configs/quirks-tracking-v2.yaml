@@ -293,7 +293,10 @@ model:
                 output_object: track
                 target_object: particle
                 fields: [log10_f_over_m]
-                loss_weight: 1.0
+                # ABLATION[finding-first]: refinement head kept quiet (~5% of
+                # the loss) while finding converges; it dominates late for
+                # free as the solved finding terms extinguish
+                loss_weight: 0.2
                 cost_weight: 0.0
                 dim: *dim
 
