@@ -15,6 +15,14 @@ with hepattn's TrackML data module:
 particle_id 0, i.e. noise) - stage-A configuration where the model's sole
 job is quirk finding.
 
+v2 schema additions (all consumed via config, ablation-friendly):
+  hits:  cl_charge (raw cluster charge count, log1p), cl_size (pixel count)
+         - ionization observables, strong for slow heavily-ionising quirks;
+         s_arc [m], phase [turns 0-1]: position of each QUIRK hit along the
+         analytic string trajectory (nearest point on the integrable
+         zig-zag anchored at the vertex; ~5 mm faithful). 0 for other hits.
+  parts: vx vy vz [mm] production vertex.
+
   prep_quirks.py DUMP.root OUTDIR --mass 100 --lambda 464 [--quirks-only]
 """
 import argparse
@@ -26,6 +34,35 @@ import pandas as pd
 import uproot
 
 PDG = 10000100
+HBARC_GEV_MM = 1.9732705e-13  # hbar*c in GeV*mm
+
+
+def quirk_trajectory_samples(p3, m, lam_ev, beta, gam, k, b2, n_period=6, n_samp=12000):
+    """Analytic lab trajectory of one quirk relative to its vertex.
+
+    Returns (pts[mm] (N,3), s_arc[mm] (N,), phase[turns] (N,)). Same
+    integrable string-only motion as quirk_trajectory.py: constant force
+    F = Lambda^2 along the pair axis in the pair rest frame, boosted to lab.
+    """
+    bp = beta @ p3
+    E = np.sqrt(p3 @ p3 + m * m)
+    prest = p3 + (k * bp - gam * E) * beta
+    p0 = np.linalg.norm(prest)
+    if p0 <= 0:
+        return None
+    nhat = prest / p0
+    F = (lam_ev * 1e-9) ** 2
+    tau = 4.0 * p0 / F
+    E0 = np.sqrt(p0**2 + m**2)
+    t = np.linspace(0.0, n_period * tau, n_samp)
+    ph = (t % tau) * F
+    pmag = np.where(ph <= 2 * p0, p0 - ph, ph - 3 * p0)
+    xmag = np.where(ph <= 2 * p0, 1.0, -1.0) * (E0 - np.sqrt(pmag**2 + m**2)) / F
+    X = xmag[:, None] * nhat[None, :]
+    bx = X @ beta
+    lab = (X + (k * bx + gam * t)[:, None] * beta[None, :]) * HBARC_GEV_MM
+    s = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(lab, axis=0), axis=1))])
+    return lab, s, (t % tau) / tau
 
 
 def main():
@@ -98,6 +135,8 @@ def main():
             "volume_id": np.where(hw, 8, 9).astype(np.int32),
             "particle_id": pid,
             "charge_frac": chg / np.maximum(npix, 1.0),
+            "cl_charge": np.log1p(chg),     # ionization: raw cluster charge
+            "cl_size": npix,                # ionization: cluster pixel count
             "leta": np.asarray(br["CLloc_eta"][ev], dtype=np.float32)[cl1],
             "lphi": np.asarray(br["CLloc_phi"][ev], dtype=np.float32)[cl1],
             "lx": np.asarray(br["CLloc_direction1"][ev], dtype=np.float32)[cl1],
@@ -131,6 +170,37 @@ def main():
                 n = -n
         for i, c in enumerate("nx ny nz".split()):
             parts[c] = n[i]
+
+        # per-hit position along the analytic quirk trajectory: arc length
+        # s_arc [m] and oscillation phase [turns]; 0 for non-quirk hits
+        hits["s_arc"] = np.float32(0.0)
+        hits["phase"] = np.float32(0.0)
+        qpx = np.asarray(br["Part_px"][ev])[isq] / 1000.0
+        qpy = np.asarray(br["Part_py"][ev])[isq] / 1000.0
+        qpz = np.asarray(br["Part_pz"][ev])[isq] / 1000.0
+        qE = np.sqrt(qpx**2 + qpy**2 + qpz**2 + args.mass**2)
+        P = np.array([qpx.sum(), qpy.sum(), qpz.sum()])
+        Etot = qE.sum()
+        beta = P / Etot
+        b2 = beta @ beta
+        if 0 < b2 < 1:
+            gam = 1.0 / np.sqrt(1.0 - b2)
+            k = (gam - 1.0) / b2
+            for j, qbar in enumerate(bar[isq]):
+                hm = pid == qbar
+                if not hm.any():
+                    continue
+                traj = quirk_trajectory_samples(
+                    np.array([qpx[j], qpy[j], qpz[j]]), args.mass, args.lam,
+                    beta, gam, k, b2)
+                if traj is None:
+                    continue
+                pts, s, phase = traj
+                rel = sp[hm] - v
+                near = np.argmin(
+                    ((rel[:, None, :] - pts[None, :, :]) ** 2).sum(-1), axis=1)
+                hits.loc[hm, "s_arc"] = (s[near] / 1000.0).astype(np.float32)
+                hits.loc[hm, "phase"] = phase[near].astype(np.float32)
 
         name = f"event{args.offset + ev:09d}"
         hits.to_parquet(os.path.join(args.outdir, name + "-hits.parquet"))
