@@ -340,7 +340,7 @@ model:
                 plane_task_name: track_plane
                 plane_output_key: track_regr
                 input_constituent: hit
-                position_scale: 0.001
+                position_scale: 0.1   # loader pre-scales mm by 0.01; this takes its units to meters
                 target_object: particle
                 loss_weight: 1.0
 
