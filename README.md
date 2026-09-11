@@ -90,57 +90,49 @@ cd hepattn && pixi shell
 | `templates/`, `bootstrap.sh` | slurm scripts get generated into `slurm/` with your paths |
 | `$SCRATCH` (ourdisk) | container, pixi env/caches, data, logs — **never in $HOME** (quota) |
 
-## Roadmap: model improvements, in priority order
+## Next steps
 
-Targeting the current bottleneck (hit-mask learning) first:
+Implemented and in the current config (see the ABLATION tags): per-hit
+phase/arc-length supervision, encoder quirk-hit classifier, decoder depth 6,
+ionization features, plane pair-consistency, mask-weighted coplanarity loss,
+mask-loss rebalance (null_weight, dice), finding-first weighting, AdamW +
+gradient clipping. Each is a one-block removal for ablation studies.
 
-1. **Per-hit phase/arc-length supervision** — the highest-value idea.
-   At prep time, label every truth quirk hit with its arc length and
-   oscillation phase along the analytic string trajectory (the tracer in
-   `plot_quirk_eval.py` matches real hits to ~4–5 mm, good enough for
-   labels). Add a query-conditioned per-hit regression head (hepattn's
-   object–hit task machinery supports this) predicting the phase. This is
-   dense supervision through the same (query × hit) pathway as the mask,
-   forces the model to learn the *ordered periodic path* rather than an
-   unordered hit set, and — since the phase rate is Λ²/m — triangulates the
-   f/m regression from every hit pair instead of one scalar per track.
-2. **Encoder auxiliary head**: per-hit "quirk hit" classifier in the empty
-   `encoder_tasks` slot. Gives the encoder a direct gradient for separating
-   quirk hits from background instead of relying on gradients through the
-   decoder.
-3. **Capacity**: decoder depth 3 → 6 (more mask-refinement iterations,
-   each deep-supervised) and/or dim 256 → 384. Our events are 40× smaller
-   than what the defaults were sized for; this costs minutes per epoch.
-4. **Ionization features**: add absolute cluster charge and cluster size to
-   the hit features. Quirks are slow (β* ~ 0.3–0.8) and heavily ionizing —
-   strong per-hit discriminators the model currently never sees.
-5. **Tie the pair's plane predictions**: both quirks share one plane; add a
-   consistency loss between the two matched queries' normals (or predict
-   the plane once from a symmetric pooling of both). Free physics
-   constraint; also enables coplanarity-based hit cleaning at inference
-   (prune claimed hits by distance to the predicted plane).
-6. **Heteroscedastic f/m regression**: predict (μ, σ) with a Gaussian NLL.
-   Resolution varies hugely across Λ (no visible oscillation at 10 keV);
-   a learned σ stops unresolvable events dragging the head to the dataset
-   mean and gives the downstream (m, Λ) fit per-event uncertainties.
-7. **Mask-weighted coplanarity loss**: penalize claimed hits by distance to
-   the predicted plane — couples the mask and geometry heads.
-8. **Pair-as-one-object** (reserve): one query per QQ̄ pair with a single
-   mask and one (plane, f/m). Eliminates arm-swapping between the two
-   queries; adopt if evals show persistent cross-arm confusion.
-9. **Physics decoder** (ambitious, after 1 hits its ceiling): regress
-   trajectory parameters per query, render the analytic zig-zag
-   differentiably, and use distance-to-trajectory as a mask/attention
-   prior — locality defined along the physical path, not in φ.
+Open, in priority order:
 
-Deliberately rejected: hit filtering (nothing to prune), windowed/φ-local
+1. **Prep quality cut: require both quirks to have >= 5 spacepoints.**
+   Events where a quirk leaves fewer hits are barely reconstructable and
+   dilute the mask supervision; keep the acceptance loss bookkept per
+   Lambda (the removal rate is physics, not junk). Prep-flag change +
+   re-prep.
+2. **Purity curriculum**: warm-resume with `null_weight` raised (0.01 ->
+   ~0.05) once recall is established. The low value is what escapes the
+   claim-nothing collapse early; it also caps purity by making claimed
+   background nearly free. The designated knob for the ~hundreds-of-hits
+   mask plateau.
+3. **Background-only events** — required before any physics claim: the
+   model has never seen a quirk-free event, so its fake rate on SM
+   background is unmeasured and the validity head is unfalsifiable.
+   Cheap proxy: drop quirk-linked hits from signal events at prep time;
+   real low-mu SM MC later. Needs the loader's empty-event guard relaxed.
+4. **Pair-as-one-object**: one query per QQbar pair with a single mask and
+   one (plane, f/m). Evals show the failure it targets is real: declared
+   tracks are near-duplicates (mask IoU ~0.9) covering one arm's region
+   rather than one query per arm. `merge_quirk_pair` in the data module
+   already implements the target side; flip it and halve the queries.
+5. **Attention-pooled regression inputs**: let the f/m and plane heads read
+   a mask-weighted pooling of hit embeddings instead of the query vector
+   alone — the oscillation scale lives in hit geometry. Relevant if the
+   regressions stay near dataset-mean after finding converges.
+6. **Physics decoder** (ambitious): regress trajectory parameters per
+   query, render the analytic zig-zag differentiably, and use
+   distance-to-trajectory as a mask/attention prior — locality defined
+   along the physical path, not in phi.
+
+Deliberately rejected: hit filtering (nothing to prune), windowed/phi-local
 attention (wrong prior for back-to-back oscillating pairs), seeding queries
 from innermost hits (`is_first` assumes helical tracks), truth trajectory as
 an input (only exists at training time — it can only ever be supervision).
-
-Also required before any physics claim: **background-only training/eval
-events** — the model has never seen a quirk-free event, so its fake rate on
-Standard Model background is unmeasured.
 
 ## Notes
 
