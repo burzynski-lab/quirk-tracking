@@ -35,8 +35,10 @@ submitting (get a key at comet.com). Without it, runs log offline.
 
 | file | use |
 |---|---|
-| `quirks/configs/quirks-tracking-q4.yaml` | **recommended** — 4 queries |
-| `quirks/configs/quirks-tracking.yaml` | 8-query baseline (kept for reference) |
+| `quirks/configs/quirks-tracking-v2.yaml` | **recommended** — full ingredient stack, ABLATION-tagged |
+| `quirks/configs/quirks-tracking-v2-cpu.yaml` | CPU inference/smoke variant (torch attention, no compile) |
+| `quirks/configs/quirks-tracking-q4.yaml` | pre-v2 4-query baseline (ablation reference) |
+| `quirks/configs/quirks-tracking.yaml` | original 8-query baseline (historical) |
 
 Empirical findings baked into these configs — do not undo them casually:
 
@@ -52,8 +54,12 @@ Empirical findings baked into these configs — do not undo them casually:
   correlation we want.
 - **`track_valid` BCE loss weight 1.0** (matching cost stays 0.1 so the
   Hungarian assignment remains mask-dominated).
-- **No hit filter** (`encoder_tasks` empty): nothing to prune at 2–3k
-  spacepoints. `encoder_loss = 0` on Comet is therefore expected.
+- **No hit filtering**: nothing to prune at 2–3k spacepoints. The v2
+  encoder task is an auxiliary classifier only (`mask_keys: false`) — it
+  teaches the encoder which hits are quirks but removes nothing.
+- **AdamW with gradient clipping**, not Lion: sign-based updates cannot
+  accumulate the sign-noisy per-event gradients of diverse data once the
+  collapse directions are priced out of the loss.
 
 ## Evaluating a checkpoint
 
