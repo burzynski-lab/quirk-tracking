@@ -131,14 +131,17 @@ trainer:
         refresh_rate: 50
 
 model:
-  optimizer: Lion
+  # ABLATION[optimizer]: Lion's sign-based updates random-walk on our
+  # sign-noisy batch-1 gradients once the collapse directions are priced
+  # out; AdamW's momentum averages ~10-100 events in time.
+  optimizer: AdamW
 
   # Learning rate scheduler config
   lrs_config:
     initial: 1e-7
-    max: 5e-5
+    max: 1e-4   # AdamW scale; Lion LRs do not transfer
     end: 1e-5
-    pct_start: 0.02
+    pct_start: 0.005   # warmup peaks ~epoch 1; upstream 0.02 was ~4 epochs at our step counts
     skip_scheduler: false
     weight_decay: 1e-5
 
