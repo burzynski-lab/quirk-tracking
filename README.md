@@ -54,9 +54,11 @@ Empirical findings baked into these configs — do not undo them casually:
   correlation we want.
 - **`track_valid` BCE loss weight 1.0** (matching cost stays 0.1 so the
   Hungarian assignment remains mask-dominated).
-- **No hit filtering**: nothing to prune at 2–3k spacepoints. The v2
-  encoder task is an auxiliary classifier only (`mask_keys: false`) — it
-  teaches the encoder which hits are quirks but removes nothing.
+- **No hit filtering yet**: not needed for memory/compute at 2–3k
+  spacepoints (its original purpose at TrackML scale); whether it is
+  needed for *physics* — reducing the background the mask head must
+  reject — is an open question (see Next steps). The v2 encoder task is
+  an auxiliary classifier only (`mask_keys: false`); it removes nothing.
 - **AdamW with gradient clipping**, not Lion: sign-based updates cannot
   accumulate the sign-noisy per-event gradients of diverse data once the
   collapse directions are priced out of the loss.
@@ -116,29 +118,40 @@ Open, in priority order:
    claim-nothing collapse early; it also caps purity by making claimed
    background nearly free. The designated knob for the ~hundreds-of-hits
    mask plateau.
-3. **Background-only events** — required before any physics claim: the
+3. **Hit filtering for physics (not memory)**: the mask head currently
+   drowns in ~2k background hits per ~10 true; a filtering stage could cut
+   that combinatoric load. Two escalation levels: flip the existing encoder
+   classifier to `mask_keys: true` (soft in-model filter — hits below
+   threshold become unattendable to the decoder; one config line, but only
+   worthwhile once the classifier is calibrated) or train a separate
+   upstream filter model and prune in the dataloader via `hit_eval_path`,
+   the full TrackML-style pipeline. Caution: per-hit separability is weak
+   (ionization AUC ~0.6; quirk-ness is relational), so any hard filter
+   risks irrecoverable efficiency loss — always measure the filter's own
+   quirk-hit efficiency first.
+4. **Background-only events** — required before any physics claim: the
    model has never seen a quirk-free event, so its fake rate on SM
    background is unmeasured and the validity head is unfalsifiable.
    Cheap proxy: drop quirk-linked hits from signal events at prep time;
    real low-mu SM MC later. Needs the loader's empty-event guard relaxed.
-4. **Pair-as-one-object**: one query per QQbar pair with a single mask and
+5. **Pair-as-one-object**: one query per QQbar pair with a single mask and
    one (plane, f/m). Evals show the failure it targets is real: declared
    tracks are near-duplicates (mask IoU ~0.9) covering one arm's region
    rather than one query per arm. `merge_quirk_pair` in the data module
    already implements the target side; flip it and halve the queries.
-5. **Attention-pooled regression inputs**: let the f/m and plane heads read
+6. **Attention-pooled regression inputs**: let the f/m and plane heads read
    a mask-weighted pooling of hit embeddings instead of the query vector
    alone — the oscillation scale lives in hit geometry. Relevant if the
    regressions stay near dataset-mean after finding converges.
-6. **Physics decoder** (ambitious): regress trajectory parameters per
+7. **Physics decoder** (ambitious): regress trajectory parameters per
    query, render the analytic zig-zag differentiably, and use
    distance-to-trajectory as a mask/attention prior — locality defined
    along the physical path, not in phi.
 
-Deliberately rejected: hit filtering (nothing to prune), windowed/phi-local
-attention (wrong prior for back-to-back oscillating pairs), seeding queries
-from innermost hits (`is_first` assumes helical tracks), truth trajectory as
-an input (only exists at training time — it can only ever be supervision).
+Deliberately rejected: windowed/phi-local attention (wrong prior for
+back-to-back oscillating pairs), seeding queries from innermost hits
+(`is_first` assumes helical tracks), truth trajectory as an input (only
+exists at training time — it can only ever be supervision).
 
 ## Notes
 
