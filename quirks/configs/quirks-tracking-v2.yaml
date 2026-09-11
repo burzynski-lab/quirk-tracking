@@ -287,9 +287,11 @@ model:
                 dim: *dim
                 loss_weight: 1.0
 
-            # ABLATION[gaussian-fom]: heteroscedastic (mu, sigma) regression;
-            # swap class back to ObjectRegressionTask for the point-estimate variant
-            - class_path: hepattn.models.task.ObjectGaussianRegressionTask
+            # ABLATION[gaussian-fom]: REMOVED 2026-09-10 - the Gaussian NLL
+            # was implicated in the NaN-gradient instability (masked-after-
+            # compute on NaN-padded targets); plain point-estimate regression
+            # restored. Re-enable by swapping the class back once trusted.
+            - class_path: hepattn.models.task.ObjectRegressionTask
               init_args:
                 name: track_fom
                 input_object: query
