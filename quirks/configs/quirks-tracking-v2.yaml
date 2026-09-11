@@ -275,7 +275,7 @@ model:
                 costs:
                   mask_dice: 2.0
                   mask_focal: 100.0
-                null_weight: 0.01
+                null_weight: 0.05   # purity curriculum step 1: was 0.01, raised at epoch-6 warm-resume
 
             - class_path: hepattn.models.task.IoUPredictionTask
               init_args:
