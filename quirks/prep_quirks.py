@@ -75,6 +75,9 @@ def main():
     ap.add_argument("--min-hits", type=int, default=3,
                     help="skip events where no kept particle would survive the "
                          "hepattn loader cuts (pt>5, |eta|<2.5, >= this many hits)")
+    ap.add_argument("--exactly-two", action="store_true",
+                    help="require EXACTLY two quirks passing the pt/eta/min-hits "
+                         "selection (reconstructable-pair denominator)")
     ap.add_argument("--events", type=int, default=-1)
     ap.add_argument("--offset", type=int, default=0,
                     help="event-number offset for unique names across files")
@@ -154,7 +157,12 @@ def main():
         eta = np.arctanh(np.clip(pz / np.maximum(p3, 1e-12), -1 + 1e-12, 1 - 1e-12))
         counts = pd.Series(pid).value_counts()
         nhits = np.array([counts.get(b, 0) for b in parts["particle_id"]])
-        if not ((pt > 5.0) & (np.abs(eta) < 2.5) & (nhits >= args.min_hits)).any():
+        passing = (pt > 5.0) & (np.abs(eta) < 2.5) & (nhits >= args.min_hits)
+        if args.exactly_two:
+            isq_kept = np.abs(np.asarray(pdg[keep])) == PDG
+            if (passing & isq_kept).sum() != 2:
+                continue
+        elif not passing.any():
             continue
 
         # truth pair plane through the vertex (both quirks share it)
