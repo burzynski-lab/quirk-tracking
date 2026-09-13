@@ -325,7 +325,11 @@ model:
                 output_object: track_hit_traj
                 target_object: particle_hit
                 fields: [phase, s_arc]
-                loss_weight: 5.0
+                # raised 5 -> 20 (epoch-20 verdict): Lambda=167-278 capture
+                # frozen at 0.01-0.07 while high-Lambda saturates; per-hit
+                # trajectory ordering is the missing signal in exactly the
+                # wide-swing regime this head supervises
+                loss_weight: 20.0
                 cost_weight: 0.0
                 dim: *dim
 
