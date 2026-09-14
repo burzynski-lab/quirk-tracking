@@ -39,7 +39,7 @@ def get(grp, path):
     return np.asarray(grp[path])[0]  # stored with leading batch dim of 1
 
 
-def quirk_trajectories(parts, n_period=4.0, n_samp=8000):
+def quirk_trajectories(parts, extent=None, n_period=4.0, n_samp=8000):
     """Analytic lab-frame trajectories [mm] for the quirk pair.
 
     Constant string force F = Lambda^2 along the pair axis makes the rest-frame
@@ -47,6 +47,9 @@ def quirk_trajectories(parts, n_period=4.0, n_samp=8000):
     sampled rest-frame 4-position is boosted to the lab and anchored at the
     production vertex. No B field, no dE/dx -- the overlay is the string-only
     zig-zag, so expect real hits to curl away from it slowly.
+    If `extent` = (xlo, xhi, ylo, yhi, zlo, zhi) is given, the number of
+    periods is grown adaptively until the trajectory leaves both the x-y and
+    the z-r plot frames (drawn to the figure edge, not a fixed cycle count).
     Returns a list of (N,3) arrays, one per quirk, or [] if not computable.
     """
     q = parts[parts["is_quirk"].astype(bool)]
@@ -78,16 +81,34 @@ def quirk_trajectories(parts, n_period=4.0, n_samp=8000):
         F = (lam * 1e-9) ** 2                       # GeV^2
         tau = 4.0 * p0 / F                          # full period, GeV^-1
         E0 = np.sqrt(p0**2 + m**2)
-        t = np.linspace(0.0, n_period * tau, n_samp)
-        ph = (t % tau) * F                          # 0 .. 4 p0
-        pmag = np.where(ph <= 2 * p0, p0 - ph, ph - 3 * p0)
-        xmag = np.sign(np.where(ph <= 2 * p0, 1.0, -1.0)) * (E0 - np.sqrt(pmag**2 + m**2)) / F
-        X = xmag[:, None] * nhat[None, :]           # rest-frame position
-        # boost (X, t) back to the lab
-        bx = X @ beta
-        lab = X + (k * bx + gam * t)[:, None] * beta[None, :] if b2 > 0 else X
         v = q[["vx", "vy", "vz"]].iloc[0].to_numpy(dtype=float)
-        out.append(lab * HBARC_GEV_MM + v)
+
+        def sample(periods, ns):
+            t = np.linspace(0.0, periods * tau, ns)
+            ph = (t % tau) * F                      # 0 .. 4 p0
+            pmag = np.where(ph <= 2 * p0, p0 - ph, ph - 3 * p0)
+            xmag = np.sign(np.where(ph <= 2 * p0, 1.0, -1.0)) * (E0 - np.sqrt(pmag**2 + m**2)) / F
+            X = xmag[:, None] * nhat[None, :]       # rest-frame position
+            bx = X @ beta                           # boost (X, t) back to the lab
+            lab = X + (k * bx + gam * t)[:, None] * beta[None, :] if b2 > 0 else X
+            return lab * HBARC_GEV_MM + v
+
+        periods, ns = n_period, n_samp
+        traj = sample(periods, ns)
+        if extent is not None:
+            xlo, xhi, ylo, yhi, zlo, zhi = extent
+            rmax = max(np.hypot(xlo, ylo), np.hypot(xhi, yhi))
+            for _ in range(8):                      # up to 4 * 2^8 = 1024 periods
+                exits_xy = ((traj[:, 0] < xlo) | (traj[:, 0] > xhi) |
+                            (traj[:, 1] < ylo) | (traj[:, 1] > yhi)).any()
+                exits_zr = ((traj[:, 2] < zlo) | (traj[:, 2] > zhi) |
+                            (np.hypot(traj[:, 0], traj[:, 1]) > rmax)).any()
+                if exits_xy and exits_zr:
+                    break
+                periods *= 2
+                ns = min(ns * 2, 400000)
+                traj = sample(periods, ns)
+        out.append(traj)
     return out
 
 
@@ -160,7 +181,11 @@ def main():
         r = np.hypot(x, y)
         qids = parts[parts.get("is_quirk", pd.Series(True, index=parts.index)).astype(bool)]["particle_id"].to_numpy()
 
-        trajs = quirk_trajectories(parts)
+        def _lim(a):
+            pad = 0.1 * (a.max() - a.min() + 1)
+            return a.min() - pad, a.max() + pad
+        xlo, xhi = _lim(x); ylo, yhi = _lim(y); zlo, zhi = _lim(z)
+        trajs = quirk_trajectories(parts, extent=(xlo, xhi, ylo, yhi, zlo, zhi))
 
         fig, axs = plt.subplots(1, 2, figsize=(14, 6.5))
         for ax, (a, b, la, lb) in zip(axs, [(x, y, "x [mm]", "y [mm]"), (z, r, "z [mm]", "r [mm]")]):
