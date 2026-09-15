@@ -2,21 +2,36 @@
 #SBATCH --job-name=quirk-train
 #SBATCH --partition=ouheptmp
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=10
-#SBATCH --mem=100G
-#SBATCH --time=24:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=7-00:00:00
 #SBATCH --output=@SCRATCH@/logs/train_%j.out
+# Train on a prepared dataset (default: the grid_v3 layout under $S/data).
+# Override via --export=ALL,VAR=...:
+#   DATA    dataset root holding train/ val/ test/   (default $S/data/grid_v3)
+#   NAME    Comet experiment name                      (default quirk-train)
+#   EPOCHS  max epochs                                 (default 50)
+#   NGPU    GPUs; also pass --gres=gpu:$NGPU to sbatch (default 1)
+#   EXTRA   extra CLI flags, e.g. "--trainer.fast_dev_run 10" for a smoke test
 QT=@QT@
 S=@SCRATCH@
-EXTRA=${EXTRA:-}   # e.g. EXTRA="--trainer.fast_dev_run 10" for a smoke test
+DATA=${DATA:-$S/data/grid_v3}
+NAME=${NAME:-quirk-train}
+EPOCHS=${EPOCHS:-50}
+NGPU=${NGPU:-1}
 export APPTAINER_TMPDIR=/tmp/$USER-apptainer; mkdir -p $APPTAINER_TMPDIR
 apptainer exec --nv --bind /ourdisk,/home \
   --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
+  --env COMET_API_KEY=$COMET_API_KEY \
   $S/containers/pixi.sif bash -c "
     cd $QT/hepattn
     pixi run python src/hepattn/experiments/trackml/run_tracking.py fit \
-      --config $QT/quirks/configs/quirks-tracking.yaml \
-      --data.train_dir $S/data/m100/train --data.val_dir $S/data/m100/val --data.test_dir $S/data/m100/test \
-      --trainer.default_root_dir $S/logs $EXTRA
+      --config $QT/quirks/configs/quirks-tracking-v2.yaml \
+      --name $NAME \
+      --data.train_dir $DATA/train --data.val_dir $DATA/val --data.test_dir $DATA/test \
+      --data.num_workers 8 \
+      --trainer.devices $NGPU --trainer.gradient_clip_val 1.0 --seed_everything 42 \
+      --trainer.max_epochs $EPOCHS --trainer.default_root_dir $S/logs $EXTRA
   "
+echo TRAIN_RC=$?
 echo TRAINDONE

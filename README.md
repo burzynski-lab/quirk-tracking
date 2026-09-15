@@ -13,20 +13,28 @@ reconstruction chain. See `PLAN.md` for the physics plan and
 git clone --recursive https://github.com/burzynski-lab/quirk-tracking.git
 cd quirk-tracking
 
-# 2. bake your paths into the slurm scripts (default scratch:
-#    /ourdisk/hpc/ouhep/$USER/dont_archive/quirk-tracking)
-./bootstrap.sh
+# 2. GENERATE the slurm scripts. `slurm/` is NOT in the repo - this step
+#    writes it from templates/ with your repo path and scratch dir baked in
+#    (default scratch: /ourdisk/hpc/ouhep/$USER/dont_archive/quirk-tracking;
+#    pass a different one as the argument if that path isn't yours).
+./bootstrap.sh            # prints: Wrote slurm/*.slurm and env.sh
+ls slurm/                 # setup_env.slurm  prep.slurm  train.slurm
 
 # 3. build the environment (GPU node, ~30 min: container + pixi env)
 sbatch slurm/setup_env.slurm      # wait for ENVDONE in the log
 
-# 4. convert the GNN4ITk dumps to training parquet (~1-2 h)
-sbatch slurm/prep.slurm           # wait for PREPDONE
+# 4. convert the GNN4ITk dumps to parquet (grid_v3 recipe: 11-task array,
+#    one mass each, ~1-2 h per task)
+sbatch slurm/prep.slurm           # wait for PREP_M<mass>_DONE in each log
 
-# 5. smoke test (2 batches), then train
+# 5. smoke test, then train (defaults: grid_v3 data, 1 GPU, 50 epochs)
 EXTRA="--trainer.fast_dev_run 10" sbatch --export=ALL slurm/train.slurm
-sbatch slurm/train.slurm
+sbatch --export=ALL,NAME=my-run slurm/train.slurm
+# multi-GPU: sbatch --gres=gpu:3 --export=ALL,NGPU=3,NAME=my-run slurm/train.slurm
 ```
+
+If `sbatch slurm/...` says the file doesn't exist, step 2 hasn't run (or ran
+from another directory) - `slurm/` only exists after `./bootstrap.sh`.
 
 Logging goes to Comet: `export COMET_API_KEY=...` in your shell before
 submitting (get a key at comet.com). Without it, runs log offline.
@@ -95,10 +103,9 @@ cd hepattn && pixi shell
 | `quirks/prep_quirks.py` | GNN4ITk dump → per-event TrackML-schema parquet (+ quirk targets: `log10_f_over_m`, plane normal, production vertex; skips events the loader would reject) |
 | `quirks/plot_quirk_eval.py` | event displays (trajectory drawn to the figure edge) + regression truth/reco comparisons from an eval h5 |
 | `quirks/inregion_auc.py`, `quirks/dup_metrics.py` | per-Lambda ranking/capture and duplication diagnostics from an eval h5 |
-| `quirks/prep_grid_v3.slurm` | the all-mass dataset recipe (train Lambda<=3000, per-point test dirs) |
 | `quirks/configs/` | MaskFormer configs (see above) |
 | `quirks/architecture.svg` | model diagram |
-| `templates/`, `bootstrap.sh` | slurm scripts get generated into `slurm/` with your paths |
+| `templates/`, `bootstrap.sh` | `./bootstrap.sh` generates `slurm/` from these with your paths (the grid_v3 prep recipe lives in `templates/prep.slurm.in`) |
 | `$SCRATCH` (ourdisk) | container, pixi env/caches, data, logs — **never in $HOME** (quota) |
 
 ## Next steps
