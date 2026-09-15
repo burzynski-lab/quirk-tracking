@@ -92,7 +92,9 @@ cd hepattn && pixi shell
 |---|---|
 | `hepattn/` | framework (submodule, our fork — do not edit upstream files casually; PR to the fork) |
 | `quirks/prep_quirks.py` | GNN4ITk dump → per-event TrackML-schema parquet (+ quirk targets: `log10_f_over_m`, plane normal, production vertex; skips events the loader would reject) |
-| `quirks/plot_quirk_eval.py` | event displays + regression truth/reco comparisons from an eval h5 |
+| `quirks/plot_quirk_eval.py` | event displays (trajectory drawn to the figure edge) + regression truth/reco comparisons from an eval h5 |
+| `quirks/inregion_auc.py`, `quirks/dup_metrics.py` | per-Lambda ranking/capture and duplication diagnostics from an eval h5 |
+| `quirks/prep_grid_v3.slurm` | the all-mass dataset recipe (train Lambda<=3000, per-point test dirs) |
 | `quirks/configs/` | MaskFormer configs (see above) |
 | `quirks/architecture.svg` | model diagram |
 | `templates/`, `bootstrap.sh` | slurm scripts get generated into `slurm/` with your paths |
@@ -101,49 +103,65 @@ cd hepattn && pixi shell
 ## Next steps
 
 Implemented and in the current config (see the ABLATION tags): per-hit
-phase/arc-length supervision, encoder quirk-hit classifier, decoder depth 6,
-ionization features, plane pair-consistency, mask-weighted coplanarity loss,
-mask-loss rebalance (null_weight, dice), finding-first weighting, AdamW +
-gradient clipping. Each is a one-block removal for ablation studies.
+phase/arc-length supervision (weight 20), encoder quirk-hit classifier,
+decoder depth 6, ionization features, plane pair-consistency, mask-weighted
+coplanarity loss, mask-loss rebalance (null_weight 0.05, dice 10),
+finding-first weighting, AdamW + gradient clipping, exactly-2-quirks x
+>=5-spacepoints prep selection, all-mass `grid_v3` dataset (train on
+Lambda <= 3000 eV, per-point test dirs for the efficiency grid).
+Each is a one-block removal for ablation studies.
+
+Tooling in `quirks/`: `inregion_auc.py` (region capture vs. within-region
+ranking, per Lambda), `dup_metrics.py` (pairwise pred-mask IoU, duplicate
+fraction, de-duplicated efficiency).
 
 Open, in priority order:
 
-1. **Prep quality cut: require both quirks to have >= 5 spacepoints.**
-   Events where a quirk leaves fewer hits are barely reconstructable and
-   dilute the mask supervision; keep the acceptance loss bookkept per
-   Lambda (the removal rate is physics, not junk). Prep-flag change +
-   re-prep.
-2. **Purity curriculum**: warm-resume with `null_weight` raised (0.01 ->
-   ~0.05) once recall is established. The low value is what escapes the
-   claim-nothing collapse early; it also caps purity by making claimed
-   background nearly free. The designated knob for the ~hundreds-of-hits
-   mask plateau.
-3. **Hit filtering for physics (not memory)**: the mask head currently
-   drowns in ~2k background hits per ~10 true; a filtering stage could cut
-   that combinatoric load. Two escalation levels: flip the existing encoder
-   classifier to `mask_keys: true` (soft in-model filter — hits below
-   threshold become unattendable to the decoder; one config line, but only
-   worthwhile once the classifier is calibrated) or train a separate
-   upstream filter model and prune in the dataloader via `hit_eval_path`,
-   the full TrackML-style pipeline. Caution: per-hit separability is weak
-   (ionization AUC ~0.6; quirk-ness is relational), so any hard filter
-   risks irrecoverable efficiency loss — always measure the filter's own
-   quirk-hit efficiency first.
-4. **Background-only events** — required before any physics claim: the
+1. **Fix the plane-normal target — it has never learned.** `track_plane`
+   smooth-L1 sits at the constant-predictor value (0.167) in every run.
+   Cause: the label's sign convention (nz >= 0) is nearly random for our
+   mostly-transverse normals, so n and -n label the same plane and the
+   loss averages to the mean. Fix: a sign-free representation — plane
+   azimuth as (cos 2phi0, sin 2phi0) plus |nz| — or a sign-symmetric loss
+   (min over +-n). Prep column + loss change. The coplanarity and
+   pair-consistency terms read this head, so fixing it may unlock both.
+2. **Mask orthogonality**: ~55% of multi-track events are duplicates
+   (pairwise pred-mask IoU > 0.5) — one merged-pair mask copied into both
+   slots. Finding ("pair found", ~0.5-0.6) is honest, but arm separation
+   is unsolved and no logged metric sees it. Add a pairwise soft-IoU
+   penalty between valid queries' masks (truth masks are disjoint, so zero
+   overlap is the correct target; small custom task like the coplanarity
+   one). Success = mid-Lambda dup_frac falling without high-Lambda
+   efficiency loss (at Lambda >= 2 keV the arms are physically merged).
+   Also add a strict one-to-one efficiency to the val metrics.
+3. **Background-only events** — required before any physics claim: the
    model has never seen a quirk-free event, so its fake rate on SM
    background is unmeasured and the validity head is unfalsifiable.
    Cheap proxy: drop quirk-linked hits from signal events at prep time;
    real low-mu SM MC later. Needs the loader's empty-event guard relaxed.
-5. **Pair-as-one-object**: one query per QQbar pair with a single mask and
-   one (plane, f/m). Evals show the failure it targets is real: declared
-   tracks are near-duplicates (mask IoU ~0.9) covering one arm's region
-   rather than one query per arm. `merge_quirk_pair` in the data module
-   already implements the target side; flip it and halve the queries.
+4. **Hit filtering for physics (not memory)**: the mask head faces ~2k
+   background hits per ~10 true; a filtering stage could cut that load.
+   Two escalation levels: flip the encoder classifier to `mask_keys: true`
+   (soft in-model filter; one config line — the classifier now rejects
+   ~69% of background at 94% quirk-hit recall, so this is becoming
+   viable) or a separate upstream filter model pruning in the dataloader
+   via `hit_eval_path`. Any hard filter risks irrecoverable efficiency
+   loss — measure the filter's own quirk-hit efficiency first.
+5. **Batched training**: batch size 1 leaves >95% of each step as
+   overhead (dataloading, scipy matcher, Python loss loops, launch
+   latency); a padded-collate for variable-length events would plausibly
+   give 2-4x on the same GPUs. Framework work in the fork; more valuable
+   than faster hardware.
 6. **Attention-pooled regression inputs**: let the f/m and plane heads read
    a mask-weighted pooling of hit embeddings instead of the query vector
-   alone — the oscillation scale lives in hit geometry. Relevant if the
-   regressions stay near dataset-mean after finding converges.
-7. **Physics decoder** (ambitious): regress trajectory parameters per
+   alone — the oscillation scale lives in hit geometry. f/m is now
+   learning (val residual 0.57 and falling) so this is lower priority
+   than it was; revisit if it plateaus.
+7. **Pair-as-one-object** (reserve): one query per QQbar pair with a
+   single mask and one (plane, f/m). Dissolves the duplication problem
+   rather than penalising it; adopt if item 2 fails. `merge_quirk_pair`
+   in the data module already implements the target side.
+8. **Physics decoder** (ambitious): regress trajectory parameters per
    query, render the analytic zig-zag differentiably, and use
    distance-to-trajectory as a mask/attention prior — locality defined
    along the physical path, not in phi.
