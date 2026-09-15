@@ -35,10 +35,11 @@ submitting (get a key at comet.com). Without it, runs log offline.
 
 | file | use |
 |---|---|
-| `quirks/configs/quirks-tracking-v2.yaml` | **recommended** — full ingredient stack, ABLATION-tagged |
-| `quirks/configs/quirks-tracking-v2-cpu.yaml` | CPU inference/smoke variant (torch attention, no compile) |
-| `quirks/configs/quirks-tracking-q4.yaml` | pre-v2 4-query baseline (ablation reference) |
-| `quirks/configs/quirks-tracking.yaml` | original 8-query baseline (historical) |
+| `quirks/configs/quirks-tracking-v2.yaml` | **the** training config — full ingredient stack, ABLATION-tagged |
+| `quirks/configs/quirks-tracking-v2-cpu.yaml` | CPU inference/smoke variant of the same (torch attention, no compile) |
+
+Earlier configs (8-query original, 4-query baseline) are in git history;
+their findings are captured below rather than kept as files.
 
 Empirical findings baked into these configs — do not undo them casually:
 
