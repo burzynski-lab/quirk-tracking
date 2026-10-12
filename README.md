@@ -137,7 +137,7 @@ python quirks/dup_metrics.py     EVAL.h5                # duplicate masks, dedup
 ## Interactive GPU shell
 
 ```bash
-srun -p ouheptmp --gres gpu:1 --mem 100G --cpus-per-task 8 --pty bash
+srun -p ouhep_gpu --gres gpu:1 --mem 100G --cpus-per-task 8 --pty bash
 source env.sh
 export APPTAINER_TMPDIR=/tmp/$USER-apptainer PIXI_HOME=$SCRATCH/pixi-home PIXI_CACHE_DIR=$SCRATCH/pixi-cache
 apptainer shell --nv --bind /ourdisk,/home $SCRATCH/containers/pixi.sif

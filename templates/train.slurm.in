@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=quirk-train
-#SBATCH --partition=ouheptmp
+#SBATCH --partition=ouhep_gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
