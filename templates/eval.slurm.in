@@ -1,0 +1,80 @@
+#!/bin/bash
+#SBATCH --job-name=quirk-eval
+#SBATCH --partition=ouheptmp
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=4:00:00
+#SBATCH --output=@SCRATCH@/logs/eval_%A_%a.out
+# Run `test` on one checkpoint: the PredictionWriter callback writes
+#     <ckpt-dir>/<ckpt-name>_<basename of the data dir>_eval.h5
+# and, with PLOTS=1, event displays + regression plots next to it.
+#
+# Override via --export=ALL,VAR=...:
+#   CKPT    checkpoint to evaluate                       (REQUIRED)
+#   DATA    dataset root holding train/ val/ test/       (default $S/data/grid_v3)
+#   DIR     evaluate this one directory of events        (default $DATA/test)
+#   CONFIG  model config; must match the training one    (default v2)
+#   PLOTS   1 = also run plot_quirk_eval.py              (default 0)
+#   OUT     plot output dir                              (default <run>/plots)
+#   MAX_DISPLAYS  event displays to draw                 (default 50)
+#
+# Whole-test-split eval, one job:
+#   sbatch --export=ALL,CKPT=/path/epoch=012-val_loss=....ckpt slurm/eval.slurm
+#
+# Per-(m, Lambda) efficiency grid, one array task per point. The upper index
+# is (number of test/ subdirectories - 1); grid_v3 has 109, hence 0-108:
+#   sbatch --array=0-108 --export=ALL,CKPT=... slurm/eval.slurm
+# Each point lands in its own h5 because the filename carries the directory
+# name (..._m100.L464_eval.h5), so array tasks never overwrite each other.
+QT=@QT@
+S=@SCRATCH@
+CKPT=${CKPT:?set CKPT=/path/to/epoch=NNN-val_loss=....ckpt}
+DATA=${DATA:-$S/data/grid_v3}
+CONFIG=${CONFIG:-$QT/quirks/configs/quirks-tracking-v2.yaml}
+MAX_DISPLAYS=${MAX_DISPLAYS:-50}
+
+# Array mode picks the Nth per-point directory; otherwise evaluate DIR
+# (default: the whole test split).
+if [ -n "$SLURM_ARRAY_TASK_ID" ]; then
+    mapfile -t POINTS < <(ls -d $DATA/test/*/ 2>/dev/null | sort)
+    DIR=${POINTS[$SLURM_ARRAY_TASK_ID]}
+    [ -n "$DIR" ] || { echo "no point at index $SLURM_ARRAY_TASK_ID (${#POINTS[@]} found)"; exit 1; }
+else
+    DIR=${DIR:-$DATA/test}
+fi
+DIR=${DIR%/}
+[ -d "$DIR" ] || { echo "no such data dir: $DIR"; exit 1; }
+RUN=$(dirname $(dirname $CKPT))          # <run>/ckpts/<file>.ckpt -> <run>
+OUT=${OUT:-$RUN/plots}
+H5=$(dirname $CKPT)/$(basename $CKPT .ckpt)_$(basename $DIR)_eval.h5
+echo "checkpoint: $CKPT"
+echo "data dir:   $DIR"
+echo "eval h5:    $H5"
+
+export APPTAINER_TMPDIR=/tmp/$USER-apptainer; mkdir -p $APPTAINER_TMPDIR
+apptainer exec --nv --bind /ourdisk,/home \
+  --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
+  $S/containers/pixi.sif bash -c "
+    cd $QT/hepattn
+    pixi run python src/hepattn/experiments/trackml/run_tracking.py test \
+      --config $CONFIG \
+      --data.train_dir $DIR --data.val_dir $DIR --data.test_dir $DIR \
+      --data.num_workers 4 \
+      --ckpt_path $CKPT $EXTRA
+  "
+RC=$?
+# The data module demands all three dirs, so train/val are pointed at the
+# same place as test; only test_dir is read under the `test` subcommand.
+if [ $RC -eq 0 ] && [ "${PLOTS:-0}" = 1 ]; then
+    apptainer exec --nv --bind /ourdisk,/home \
+      --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
+      $S/containers/pixi.sif bash -c "
+        cd $QT/hepattn
+        pixi run python $QT/quirks/plot_quirk_eval.py \
+          $H5 $DIR $OUT --max-displays $MAX_DISPLAYS
+      "
+    RC=$?
+fi
+echo EVAL_RC=$RC
+echo EVALDONE

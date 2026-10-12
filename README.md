@@ -18,7 +18,7 @@ cd quirk-tracking
 #    (default scratch: /ourdisk/hpc/ouhep/$USER/dont_archive/quirk-tracking;
 #    pass a different one as the argument if that path isn't yours).
 ./bootstrap.sh            # prints: Wrote slurm/*.slurm and env.sh
-ls slurm/                 # setup_env.slurm  prep.slurm  train.slurm
+ls slurm/                 # setup_env.slurm  prep.slurm  train.slurm  eval.slurm
 
 # 3. build the environment (GPU node, ~30 min: container + pixi env)
 sbatch slurm/setup_env.slurm      # wait for ENVDONE in the log
@@ -31,6 +31,9 @@ sbatch slurm/prep.slurm           # wait for PREP_M<mass>_DONE in each log
 EXTRA="--trainer.fast_dev_run 10" sbatch --export=ALL slurm/train.slurm
 sbatch --export=ALL,NAME=my-run slurm/train.slurm
 # multi-GPU: sbatch --gres=gpu:3 --export=ALL,NGPU=3,NAME=my-run slurm/train.slurm
+
+# 6. evaluate a checkpoint (see "Evaluating a checkpoint" below)
+sbatch --export=ALL,CKPT=$SCRATCH/logs/<run>/ckpts/<file>.ckpt,PLOTS=1 slurm/eval.slurm
 ```
 
 If `sbatch slurm/...` says the file doesn't exist, step 2 hasn't run (or ran
@@ -74,16 +77,62 @@ Empirical findings baked into these configs — do not undo them casually:
 
 ## Evaluating a checkpoint
 
+Evaluation is two steps: `run_tracking.py test` writes an eval h5 of
+predictions and targets, then the plotting/diagnostic scripts read that h5.
+`slurm/eval.slurm` does both (step 2 only with `PLOTS=1`).
+
 ```bash
-# writes <ckpt>_<split>_eval.h5 next to the checkpoint, then event displays
-# (with analytic trajectory overlays) + regression truth/reco plots
-python quirks/plot_quirk_eval.py EVAL.h5 DATA_DIR OUTDIR
+# whole test split, one job
+sbatch --export=ALL,CKPT=$SCRATCH/logs/<run>/ckpts/epoch=012-val_loss=....ckpt \
+       slurm/eval.slurm
+
+# same, plus event displays and regression plots into <run>/plots
+sbatch --export=ALL,CKPT=...,PLOTS=1 slurm/eval.slurm
+
+# the per-(m, Lambda) efficiency grid: one array task per test/ subdirectory
+# (grid_v3 has 109 of them, so the range is 0-108)
+sbatch --array=0-108 --export=ALL,CKPT=... slurm/eval.slurm
 ```
 
-The eval h5 comes from `run_tracking.py test --config ... --ckpt_path ...`
-(the `PredictionWriter` callback in the config writes it). Trajectory
-overlays need the `vx,vy,vz` columns, i.e. data prepared with the current
-`prep_quirks.py`.
+What `test` writes, and where: the `PredictionWriter` callback puts
+
+```
+<ckpt dir>/<ckpt name>_<basename of the data dir>_eval.h5
+```
+
+next to the checkpoint. The name carries the *data directory*, not the
+split, which is what makes the array form safe — `test/m100.L464/` gives
+`..._m100.L464_eval.h5`, so the 109 points never overwrite each other.
+
+Three things that are easy to get wrong:
+
+- **`--config` must be the config the checkpoint was trained with**
+  (`quirks-tracking-v2.yaml`). A mismatched architecture fails to load the
+  state dict.
+- **All three data dirs must be set**, even though only `test_dir` is read:
+  the data module constructs train/val/test eagerly. `eval.slurm` points all
+  three at the directory being evaluated.
+- **Trajectory overlays need `vx,vy,vz`**, i.e. data prepared with the
+  current `prep_quirks.py`. Older parquet has no vertex columns and the
+  displays fall back to straight lines from the origin.
+
+On CPU (no GPU queue, slower, fine for a few hundred events) swap the config
+and accelerator:
+
+```bash
+sbatch --partition=sooner_test --gres=NONE \
+  --export=ALL,CKPT=...,CONFIG=$PWD/quirks/configs/quirks-tracking-v2-cpu.yaml,\
+EXTRA="--trainer.accelerator cpu --trainer.devices 1 --trainer.precision 32" \
+  slurm/eval.slurm
+```
+
+Reading an eval h5 afterwards:
+
+```bash
+python quirks/plot_quirk_eval.py EVAL.h5 DATA_DIR OUTDIR [--max-displays 50]
+python quirks/inregion_auc.py    EVAL.h5 [--topk 200]   # region capture, ranking
+python quirks/dup_metrics.py     EVAL.h5                # duplicate masks, dedup eff
+```
 
 ## Interactive GPU shell
 
@@ -105,7 +154,7 @@ cd hepattn && pixi shell
 | `quirks/inregion_auc.py`, `quirks/dup_metrics.py` | per-Lambda ranking/capture and duplication diagnostics from an eval h5 |
 | `quirks/configs/` | MaskFormer configs (see above) |
 | `quirks/architecture.svg` | model diagram |
-| `templates/`, `bootstrap.sh` | `./bootstrap.sh` generates `slurm/` from these with your paths (the grid_v3 prep recipe lives in `templates/prep.slurm.in`) |
+| `templates/`, `bootstrap.sh` | `./bootstrap.sh` generates `slurm/` from these with your paths (the grid_v3 prep recipe lives in `templates/prep.slurm.in`, the eval and per-point grid recipe in `templates/eval.slurm.in`) |
 | `$SCRATCH` (ourdisk) | container, pixi env/caches, data, logs — **never in $HOME** (quota) |
 
 ## Next steps
