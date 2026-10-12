@@ -3,235 +3,186 @@
 MaskFormer-based quirk-pair finding for the ATLAS quirk search, built on
 [hepattn](https://github.com/burzynski-lab/hepattn) (our fork, pinned as a
 submodule). Input is the `Dump_GNN4Itk.root` ntuples from the quirk
-reconstruction chain. See `PLAN.md` for the physics plan and
-`quirks/architecture.svg` for the model diagram.
+reconstruction chain. `PLAN.md` has the physics plan;
+`quirks/architecture.svg` is the model diagram.
 
-## Setup on schooner (OSCER)
+Everything runs inside an apptainer container on schooner (OSCER), with
+[pixi](https://pixi.sh) managing the python environment inside it. There are
+two ways to run any step:
+
+- **batch** — `sbatch slurm/<step>.slurm`, which wraps the container call.
+  Use this for real jobs.
+- **interactive** — grab a node, enter the container, run `pixi run python
+  ...` yourself. Use this for smoke tests and debugging.
+
+Both are given for each step below.
+
+---
+
+## 1. Setup (once)
 
 ```bash
-# 1. clone (anywhere in $HOME; keep it small - all data/envs go to ourdisk)
+# clone with the submodule, anywhere in $HOME (keep $HOME small: data,
+# containers and environments all live on ourdisk)
 git clone --recursive https://github.com/burzynski-lab/quirk-tracking.git
 cd quirk-tracking
 
-# 2. GENERATE the slurm scripts. `slurm/` is NOT in the repo - this step
-#    writes it from templates/ with your repo path and scratch dir baked in
-#    (default scratch: /ourdisk/hpc/ouhep/$USER/dont_archive/quirk-tracking;
-#    pass a different one as the argument if that path isn't yours).
-./bootstrap.sh            # prints: Wrote slurm/*.slurm and env.sh
-ls slurm/                 # setup_env.slurm  prep.slurm  train.slurm  eval.slurm
+# generate slurm/ from templates/ with your paths baked in.
+# slurm/ is NOT in the repo - it does not exist until you run this.
+./bootstrap.sh                 # or: ./bootstrap.sh /my/own/scratch/dir
+ls slurm/                      # setup_env.slurm prep.slurm train.slurm eval.slurm
+cat env.sh                     # the QT (repo) and SCRATCH (ourdisk) paths it used
 
-# 3. build the environment (GPU node, ~30 min: container + pixi env)
-sbatch slurm/setup_env.slurm      # wait for ENVDONE in the log
-
-# 4. convert the GNN4ITk dumps to parquet (grid_v3 recipe: 11-task array,
-#    one mass each, ~1-2 h per task)
-sbatch slurm/prep.slurm           # wait for PREP_M<mass>_DONE in each log
-
-# 5. smoke test, then train (defaults: grid_v3 data, 1 GPU, 50 epochs)
-EXTRA="--trainer.fast_dev_run 10" sbatch --export=ALL slurm/train.slurm
-sbatch --export=ALL,NAME=my-run slurm/train.slurm
-# multi-GPU: sbatch --gres=gpu:3 --export=ALL,NGPU=3,NAME=my-run slurm/train.slurm
-
-# 6. evaluate a checkpoint (see "Evaluating a checkpoint" below)
-sbatch --export=ALL,CKPT=$SCRATCH/logs/<run>/ckpts/<file>.ckpt,PLOTS=1 slurm/eval.slurm
+# build the container and the pixi environment (~30 min)
+sbatch slurm/setup_env.slurm   # finished when the log prints ENVDONE
 ```
 
-If `sbatch slurm/...` says the file doesn't exist, step 2 hasn't run (or ran
-from another directory) - `slurm/` only exists after `./bootstrap.sh`.
+Comet logging: `export COMET_API_KEY=...` in your shell before submitting
+anything (get a key at comet.com). Without it, runs log offline.
 
-Logging goes to Comet: `export COMET_API_KEY=...` in your shell before
-submitting (get a key at comet.com). Without it, runs log offline.
+## 2. Prepare the data (once per dataset)
 
-## Configs
-
-| file | use |
-|---|---|
-| `quirks/configs/quirks-tracking-v2.yaml` | **the** training config — full ingredient stack, ABLATION-tagged |
-| `quirks/configs/quirks-tracking-v2-cpu.yaml` | CPU inference/smoke variant of the same (torch attention, no compile) |
-
-Earlier configs (8-query original, 4-query baseline) are in git history;
-their findings are captured below rather than kept as files.
-
-Empirical findings baked into these configs — do not undo them casually:
-
-- **4 queries, not 8.** With quirks-only targets every event has ≤2 real
-  objects; at 8 queries the validity head's cheapest solution is "everything
-  is null" and it stays there for tens of epochs. At 4 queries (2 valid /
-  2 null) it declares tracks from the first epoch. Do not drop to 2: the
-  head then never sees a null example and is useless on background.
-- **Full self-attention, no sliding window.** The 512-hit φ-window exists
-  for 100k-hit TrackML events; ours have 150–6k hits, where full attention
-  is cheap, the window path crashes on events shorter than the window, and
-  the two quirk arms are back-to-back in φ so a φ-window would cut the very
-  correlation we want.
-- **`track_valid` BCE loss weight 1.0** (matching cost stays 0.1 so the
-  Hungarian assignment remains mask-dominated).
-- **No hit filtering yet**: not needed for memory/compute at 2–3k
-  spacepoints (its original purpose at TrackML scale); whether it is
-  needed for *physics* — reducing the background the mask head must
-  reject — is an open question (see Next steps). The v2 encoder task is
-  an auxiliary classifier only (`mask_keys: false`); it removes nothing.
-- **AdamW with gradient clipping**, not Lion: sign-based updates cannot
-  accumulate the sign-noisy per-event gradients of diverse data once the
-  collapse directions are priced out of the loss.
-
-## Evaluating a checkpoint
-
-Evaluation is two steps: `run_tracking.py test` writes an eval h5 of
-predictions and targets, then the plotting/diagnostic scripts read that h5.
-`slurm/eval.slurm` does both (step 2 only with `PLOTS=1`).
+Converts the GNN4ITk dumps to per-event parquet, one array task per mass,
+1-2 h each:
 
 ```bash
-# whole test split, one job
-sbatch --export=ALL,CKPT=$SCRATCH/logs/<run>/ckpts/epoch=012-val_loss=....ckpt \
-       slurm/eval.slurm
-
-# same, plus event displays and regression plots into <run>/plots
-sbatch --export=ALL,CKPT=...,PLOTS=1 slurm/eval.slurm
-
-# the per-(m, Lambda) efficiency grid: one array task per test/ subdirectory
-# (grid_v3 has 109 of them, so the range is 0-108)
-sbatch --array=0-108 --export=ALL,CKPT=... slurm/eval.slurm
+sbatch slurm/prep.slurm        # finished when each log prints PREP_M<mass>_DONE
 ```
 
-What `test` writes, and where: the `PredictionWriter` callback puts
+This writes `$SCRATCH/data/grid_v3/` with `train/`, `val/` and `test/`,
+where `test/` holds one subdirectory per (mass, Lambda) point. Use other
+dumps with `--export=ALL,DUMPDIR=/path/to/dumps`.
+
+## 3. Training
+
+**Batch:**
+
+```bash
+# smoke test first: 10 batches, a couple of minutes
+sbatch --export=ALL,EXTRA="--trainer.fast_dev_run 10" slurm/train.slurm
+
+# the real thing
+sbatch --export=ALL,NAME=my-run slurm/train.slurm
+
+# more GPUs: ask slurm for them AND tell lightning about them
+sbatch --gres=gpu:2 --export=ALL,NGPU=2,NAME=my-run slurm/train.slurm
+```
+
+Options, all via `--export=ALL,VAR=...`: `DATA` (dataset root, default
+`$SCRATCH/data/grid_v3`), `NAME` (Comet experiment name), `EPOCHS` (default
+50), `NGPU`, `EXTRA` (flags passed straight through to the CLI).
+
+Results go to `$SCRATCH/logs/<NAME>_<timestamp>/`, checkpoints in its
+`ckpts/` subdirectory.
+
+**Interactive:**
+
+```bash
+srun -p ouhep_gpu --gres gpu:1 --mem 100G --cpus-per-task 8 --pty bash
+source env.sh
+export APPTAINER_TMPDIR=/tmp/$USER-apptainer \
+       PIXI_HOME=$SCRATCH/pixi-home PIXI_CACHE_DIR=$SCRATCH/pixi-cache
+apptainer shell --nv --bind /ourdisk,/home $SCRATCH/containers/pixi.sif
+
+cd $QT/hepattn
+pixi run python src/hepattn/experiments/trackml/run_tracking.py fit \
+  --config $QT/quirks/configs/quirks-tracking-v2.yaml \
+  --data.train_dir $SCRATCH/data/grid_v3/train \
+  --data.val_dir   $SCRATCH/data/grid_v3/val \
+  --data.test_dir  $SCRATCH/data/grid_v3/test \
+  --trainer.devices 1 --trainer.max_epochs 50 \
+  --trainer.default_root_dir $SCRATCH/logs
+```
+
+`pixi shell` in place of `pixi run` drops you inside the environment, after
+which plain `python ...` works.
+
+## 4. Evaluation
+
+Two steps: `run_tracking.py test` writes an h5 of predictions and targets,
+then the analysis scripts read that h5. `slurm/eval.slurm` does the first,
+and the second as well if you pass `PLOTS=1`.
+
+**Batch:**
+
+```bash
+CKPT=$SCRATCH/logs/<run>/ckpts/epoch=012-val_loss=....ckpt
+
+# the whole test split
+sbatch --export=ALL,CKPT=$CKPT slurm/eval.slurm
+
+# the same, plus event displays and regression plots into <run>/plots
+sbatch --export=ALL,CKPT=$CKPT,PLOTS=1 slurm/eval.slurm
+
+# the per-(mass, Lambda) efficiency grid: one array task per test/ point
+sbatch --array=0-108 --export=ALL,CKPT=$CKPT slurm/eval.slurm
+```
+
+**Interactive** (in the container shell from step 3):
+
+```bash
+D=$SCRATCH/data/grid_v3/test
+cd $QT/hepattn
+pixi run python src/hepattn/experiments/trackml/run_tracking.py test \
+  --config $QT/quirks/configs/quirks-tracking-v2.yaml \
+  --data.train_dir $D --data.val_dir $D --data.test_dir $D \
+  --ckpt_path $CKPT
+```
+
+The h5 lands next to the checkpoint, named
 
 ```
 <ckpt dir>/<ckpt name>_<basename of the data dir>_eval.h5
 ```
 
-next to the checkpoint. The name carries the *data directory*, not the
-split, which is what makes the array form safe — `test/m100.L464/` gives
-`..._m100.L464_eval.h5`, so the 109 points never overwrite each other.
+so evaluating `test/m100.L464/` gives `..._m100.L464_eval.h5`, and grid
+points never overwrite each other.
 
-Three things that are easy to get wrong:
+Then read it:
 
-- **`--config` must be the config the checkpoint was trained with**
-  (`quirks-tracking-v2.yaml`). A mismatched architecture fails to load the
-  state dict.
-- **All three data dirs must be set**, even though only `test_dir` is read:
-  the data module constructs train/val/test eagerly. `eval.slurm` points all
-  three at the directory being evaluated.
-- **Trajectory overlays need `vx,vy,vz`**, i.e. data prepared with the
-  current `prep_quirks.py`. Older parquet has no vertex columns and the
+```bash
+pixi run python $QT/quirks/plot_quirk_eval.py EVAL.h5 DATA_DIR OUTDIR [--max-displays 50]
+pixi run python $QT/quirks/inregion_auc.py    EVAL.h5 [--topk 200]
+pixi run python $QT/quirks/dup_metrics.py     EVAL.h5
+```
+
+`plot_quirk_eval.py` draws event displays and truth/reco regression plots,
+`inregion_auc.py` reports per-Lambda region capture and ranking, and
+`dup_metrics.py` reports duplicate masks and the de-duplicated efficiency.
+
+### Three things that break evaluation
+
+- **`--config` must be the config the checkpoint was trained with.** A
+  different architecture will not load the weights.
+- **Pass all three data dirs** (`train_dir`, `val_dir`, `test_dir`) even
+  though only `test_dir` is read — the data module builds all three.
+- **Trajectory overlays need the `vx,vy,vz` columns**, i.e. data prepared
+  with the current `prep_quirks.py`. Older parquet has none, and the
   displays fall back to straight lines from the origin.
 
-On CPU (no GPU queue, slower, fine for a few hundred events) swap the config
-and accelerator:
+---
 
-```bash
-sbatch --partition=sooner_test --gres=NONE \
-  --export=ALL,CKPT=...,CONFIG=$PWD/quirks/configs/quirks-tracking-v2-cpu.yaml,\
-EXTRA="--trainer.accelerator cpu --trainer.devices 1 --trainer.precision 32" \
-  slurm/eval.slurm
-```
+## Configs
 
-Reading an eval h5 afterwards:
+| file | use |
+|---|---|
+| `quirks/configs/quirks-tracking-v2.yaml` | the training config — use this one |
+| `quirks/configs/quirks-tracking-v2-cpu.yaml` | CPU variant for inference and smoke tests (torch attention, no compile) |
 
-```bash
-python quirks/plot_quirk_eval.py EVAL.h5 DATA_DIR OUTDIR [--max-displays 50]
-python quirks/inregion_auc.py    EVAL.h5 [--topk 200]   # region capture, ranking
-python quirks/dup_metrics.py     EVAL.h5                # duplicate masks, dedup eff
-```
-
-## Interactive GPU shell
-
-```bash
-srun -p ouhep_gpu --gres gpu:1 --mem 100G --cpus-per-task 8 --pty bash
-source env.sh
-export APPTAINER_TMPDIR=/tmp/$USER-apptainer PIXI_HOME=$SCRATCH/pixi-home PIXI_CACHE_DIR=$SCRATCH/pixi-cache
-apptainer shell --nv --bind /ourdisk,/home $SCRATCH/containers/pixi.sif
-cd hepattn && pixi shell
-```
+To evaluate on CPU, use that config and add
+`EXTRA="--trainer.accelerator cpu --trainer.devices 1 --trainer.precision 32"`.
 
 ## Layout
 
 | path | what |
 |---|---|
-| `hepattn/` | framework (submodule, our fork — do not edit upstream files casually; PR to the fork) |
-| `quirks/prep_quirks.py` | GNN4ITk dump → per-event TrackML-schema parquet (+ quirk targets: `log10_f_over_m`, plane normal, production vertex; skips events the loader would reject) |
-| `quirks/plot_quirk_eval.py` | event displays (trajectory drawn to the figure edge) + regression truth/reco comparisons from an eval h5 |
-| `quirks/inregion_auc.py`, `quirks/dup_metrics.py` | per-Lambda ranking/capture and duplication diagnostics from an eval h5 |
-| `quirks/configs/` | MaskFormer configs (see above) |
-| `quirks/architecture.svg` | model diagram |
-| `templates/`, `bootstrap.sh` | `./bootstrap.sh` generates `slurm/` from these with your paths (the grid_v3 prep recipe lives in `templates/prep.slurm.in`, the eval and per-point grid recipe in `templates/eval.slurm.in`) |
-| `$SCRATCH` (ourdisk) | container, pixi env/caches, data, logs — **never in $HOME** (quota) |
+| `hepattn/` | the framework (submodule, our fork — PR changes to the fork, don't edit in place) |
+| `quirks/prep_quirks.py` | GNN4ITk dump to per-event parquet |
+| `quirks/plot_quirk_eval.py` | event displays + regression plots from an eval h5 |
+| `quirks/inregion_auc.py`, `quirks/dup_metrics.py` | ranking and duplication diagnostics from an eval h5 |
+| `quirks/configs/` | model configs |
+| `templates/`, `bootstrap.sh` | `./bootstrap.sh` writes `slurm/` from these with your paths |
+| `$SCRATCH` (ourdisk) | container, pixi environment, data, logs — **never in `$HOME`** (quota) |
 
-## Next steps
-
-Implemented and in the current config (see the ABLATION tags): per-hit
-phase/arc-length supervision (weight 20), encoder quirk-hit classifier,
-decoder depth 6, ionization features, plane pair-consistency, mask-weighted
-coplanarity loss, mask-loss rebalance (null_weight 0.05, dice 10),
-finding-first weighting, AdamW + gradient clipping, exactly-2-quirks x
->=5-spacepoints prep selection, all-mass `grid_v3` dataset (train on
-Lambda <= 3000 eV, per-point test dirs for the efficiency grid).
-Each is a one-block removal for ablation studies.
-
-Tooling in `quirks/`: `inregion_auc.py` (region capture vs. within-region
-ranking, per Lambda), `dup_metrics.py` (pairwise pred-mask IoU, duplicate
-fraction, de-duplicated efficiency).
-
-Open, in priority order:
-
-1. **Fix the plane-normal target — it has never learned.** `track_plane`
-   smooth-L1 sits at the constant-predictor value (0.167) in every run.
-   Cause: the label's sign convention (nz >= 0) is nearly random for our
-   mostly-transverse normals, so n and -n label the same plane and the
-   loss averages to the mean. Fix: a sign-free representation — plane
-   azimuth as (cos 2phi0, sin 2phi0) plus |nz| — or a sign-symmetric loss
-   (min over +-n). Prep column + loss change. The coplanarity and
-   pair-consistency terms read this head, so fixing it may unlock both.
-2. **Mask orthogonality**: ~55% of multi-track events are duplicates
-   (pairwise pred-mask IoU > 0.5) — one merged-pair mask copied into both
-   slots. Finding ("pair found", ~0.5-0.6) is honest, but arm separation
-   is unsolved and no logged metric sees it. Add a pairwise soft-IoU
-   penalty between valid queries' masks (truth masks are disjoint, so zero
-   overlap is the correct target; small custom task like the coplanarity
-   one). Success = mid-Lambda dup_frac falling without high-Lambda
-   efficiency loss (at Lambda >= 2 keV the arms are physically merged).
-   Also add a strict one-to-one efficiency to the val metrics.
-3. **Background-only events** — required before any physics claim: the
-   model has never seen a quirk-free event, so its fake rate on SM
-   background is unmeasured and the validity head is unfalsifiable.
-   Cheap proxy: drop quirk-linked hits from signal events at prep time;
-   real low-mu SM MC later. Needs the loader's empty-event guard relaxed.
-4. **Hit filtering for physics (not memory)**: the mask head faces ~2k
-   background hits per ~10 true; a filtering stage could cut that load.
-   Two escalation levels: flip the encoder classifier to `mask_keys: true`
-   (soft in-model filter; one config line — the classifier now rejects
-   ~69% of background at 94% quirk-hit recall, so this is becoming
-   viable) or a separate upstream filter model pruning in the dataloader
-   via `hit_eval_path`. Any hard filter risks irrecoverable efficiency
-   loss — measure the filter's own quirk-hit efficiency first.
-5. **Batched training**: batch size 1 leaves >95% of each step as
-   overhead (dataloading, scipy matcher, Python loss loops, launch
-   latency); a padded-collate for variable-length events would plausibly
-   give 2-4x on the same GPUs. Framework work in the fork; more valuable
-   than faster hardware.
-6. **Attention-pooled regression inputs**: let the f/m and plane heads read
-   a mask-weighted pooling of hit embeddings instead of the query vector
-   alone — the oscillation scale lives in hit geometry. f/m is now
-   learning (val residual 0.57 and falling) so this is lower priority
-   than it was; revisit if it plateaus.
-7. **Pair-as-one-object** (reserve): one query per QQbar pair with a
-   single mask and one (plane, f/m). Dissolves the duplication problem
-   rather than penalising it; adopt if item 2 fails. `merge_quirk_pair`
-   in the data module already implements the target side.
-8. **Physics decoder** (ambitious): regress trajectory parameters per
-   query, render the analytic zig-zag differentiably, and use
-   distance-to-trajectory as a mask/attention prior — locality defined
-   along the physical path, not in phi.
-
-Deliberately rejected: windowed/phi-local attention (wrong prior for
-back-to-back oscillating pairs), seeding queries from innermost hits
-(`is_first` assumes helical tracks), truth trajectory as an input (only
-exists at training time — it can only ever be supervision).
-
-## Notes
-
-- The container is only CUDA+glibc+pixi; the environment builds from
-  `hepattn/pixi.lock` and installs hepattn editable from the submodule.
-- Everything heavier than code lives on ourdisk; `$HOME` quota is tight.
-- Dumps for m = 100 (all 10 Lambda points) are at
-  `/ourdisk/hpc/ouhep/jburzyns/dont_archive/Quirks/chain/gnndump/`.
+If `sbatch slurm/...` says the file does not exist, `./bootstrap.sh` has not
+been run, or was run from a different directory.
