@@ -3,17 +3,17 @@
 MaskFormer-based quirk-pair finding for the ATLAS quirk search, built on
 [hepattn](https://github.com/burzynski-lab/hepattn) (our fork, pinned as a
 submodule). Input is the `Dump_GNN4Itk.root` ntuples from the quirk
-reconstruction chain. `PLAN.md` has the physics plan;
+reconstruction chain. `PLAN.md` has the physics plan and
 `quirks/architecture.svg` is the model diagram.
 
 Everything runs inside an apptainer container on sooner (OSCER), with
 [pixi](https://pixi.sh) managing the python environment inside it. There are
 two ways to run any step:
 
-- **batch** — `sbatch slurm/<step>.slurm`, which wraps the container call.
+- **batch**, with `sbatch slurm/<step>.slurm`, which wraps the container call.
   Use this for real jobs.
-- **interactive** — grab a node, enter the container, run `pixi run python
-  ...` yourself. Use this for smoke tests and debugging.
+- **interactive**, where you grab a node, enter the container and run
+  `pixi run python ...` yourself. Use this for smoke tests and debugging.
 
 Both are given for each step below.
 
@@ -155,7 +155,7 @@ pixi run python $QT/quirks/dup_metrics.py     EVAL.h5
 - **`--config` must be the config the checkpoint was trained with.** A
   different architecture will not load the weights.
 - **Pass all three data dirs** (`train_dir`, `val_dir`, `test_dir`) even
-  though only `test_dir` is read — the data module builds all three.
+  though only `test_dir` is read, because the data module builds all three.
 - **Trajectory overlays need the `vx,vy,vz` columns**, i.e. data prepared
   with the current `prep_quirks.py`. Older parquet has none, and the
   displays fall back to straight lines from the origin.
@@ -166,7 +166,7 @@ pixi run python $QT/quirks/dup_metrics.py     EVAL.h5
 
 | file | use |
 |---|---|
-| `quirks/configs/quirks-tracking-v2.yaml` | the training config — use this one |
+| `quirks/configs/quirks-tracking-v2.yaml` | the training config, use this one |
 | `quirks/configs/quirks-tracking-v2-cpu.yaml` | CPU variant for inference and smoke tests (torch attention, no compile) |
 
 To evaluate on CPU, use that config and add
@@ -176,13 +176,13 @@ To evaluate on CPU, use that config and add
 
 | path | what |
 |---|---|
-| `hepattn/` | the framework (submodule, our fork — PR changes to the fork, don't edit in place) |
+| `hepattn/` | the framework (submodule, our fork. PR changes to the fork, do not edit in place) |
 | `quirks/prep_quirks.py` | GNN4ITk dump to per-event parquet |
 | `quirks/plot_quirk_eval.py` | event displays + regression plots from an eval h5 |
 | `quirks/inregion_auc.py`, `quirks/dup_metrics.py` | ranking and duplication diagnostics from an eval h5 |
 | `quirks/configs/` | model configs |
 | `templates/`, `bootstrap.sh` | `./bootstrap.sh` writes `slurm/` from these with your paths |
-| `$SCRATCH` (ourdisk) | container, pixi environment, data, logs — **never in `$HOME`** (quota) |
+| `$SCRATCH` (ourdisk) | container, pixi environment, data, logs. **Never in `$HOME`** (quota) |
 
 If `sbatch slurm/...` says the file does not exist, `./bootstrap.sh` has not
 been run, or was run from a different directory.
