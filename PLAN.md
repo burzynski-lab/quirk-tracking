@@ -29,7 +29,7 @@ The ExaTrkX/GNN line is pursued separately; this is the transformer track.
 Environment: pixi inside the upstream CUDA apptainer image; `PIXI_HOME`,
 `PIXI_CACHE_DIR`, `APPTAINER_CACHEDIR` and detached pixi envs all point at
 ourdisk. Built by `Tracking/setup_env.slurm` (gpu partition; A100/L40S/H100
-all present on schooner). GPU shell for interactive work:
+all present on sooner). GPU shell for interactive work:
 
 ```
 srun -p gpu --gres gpu:1 --mem 100G --cpus-per-task 8 --pty bash

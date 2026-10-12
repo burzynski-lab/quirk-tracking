@@ -6,7 +6,7 @@ submodule). Input is the `Dump_GNN4Itk.root` ntuples from the quirk
 reconstruction chain. `PLAN.md` has the physics plan;
 `quirks/architecture.svg` is the model diagram.
 
-Everything runs inside an apptainer container on schooner (OSCER), with
+Everything runs inside an apptainer container on sooner (OSCER), with
 [pixi](https://pixi.sh) managing the python environment inside it. There are
 two ways to run any step:
 
