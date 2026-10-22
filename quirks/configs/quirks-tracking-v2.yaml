@@ -171,6 +171,8 @@ model:
                   - v
                   - s
                   - charge_frac
+                  - cl_charge
+                  - cl_size
                   - leta
                   - lphi
                   - lx
@@ -181,7 +183,7 @@ model:
                 net:
                   class_path: hepattn.models.Dense
                   init_args:
-                    input_size: 17
+                    input_size: 19
                     hidden_layers: [128]
                     output_size: *dim
                     activation: SwiGLU
