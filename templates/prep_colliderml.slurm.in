@@ -1,0 +1,32 @@
+#!/bin/bash
+#SBATCH --job-name=quirk-prep-colliderml
+#SBATCH --partition=32gb_20core
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=8G
+#SBATCH --time=2:00:00
+#SBATCH --array=0-109%20
+#SBATCH --output=@SCRATCH@/logs/prep_colliderml_%A_%a.out
+# quirkml colliderML grid (ODD detector) -> hepattn parquet (quirks/prep_colliderml.py), one array task per (mass, Lambda)
+# point; the colliderML counterpart of prep.slurm, same selection and split recipe (see prep_colliderml.py).
+# Writes OUT/train, OUT/val (Lambda <= 3000 eV only) and OUT/test/m<M>.L<L>/.
+# Override via --export=ALL,VAR=...:
+#   GRID     quirkml datasets root, <GRID>/<point>/<VERSION>/parquet (default /ourdisk/hpc/ouhep/$USER/dont_archive/quirks/quirks)
+#   VERSION  quirkml grid version                                    (default v1)
+#   OUT      output root                                             (default $S/data/colliderml_v1)
+#   EXTRA    extra prep_colliderml.py flags, e.g. "--split 0.8,0.1,0.1"
+# The array covers 110 points; with a different grid, pass --array=0-<N-1> to sbatch.
+QT=@QT@
+S=@SCRATCH@
+GRID=${GRID:-/ourdisk/hpc/ouhep/$USER/dont_archive/quirks/quirks}
+VERSION=${VERSION:-v1}
+OUT=${OUT:-$S/data/colliderml_v1}
+POINTS=($(ls -d $GRID/m*_L*_mu*/$VERSION/parquet | sort -V))
+P=${POINTS[$SLURM_ARRAY_TASK_ID]}
+[ -n "$P" ] || { echo "no point $SLURM_ARRAY_TASK_ID under $GRID (${#POINTS[@]} points)"; exit 1; }
+export APPTAINER_TMPDIR=/tmp/$USER-apptainer; mkdir -p $APPTAINER_TMPDIR
+apptainer exec --bind /ourdisk,/scratch,/home \
+  --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
+  $S/containers/pixi.sif bash -c "
+    cd $QT/hepattn && pixi run python $QT/quirks/prep_colliderml.py $P $OUT --offset $((SLURM_ARRAY_TASK_ID * 100000)) $EXTRA
+  " || exit 1
+echo PREP_COLLIDERML_DONE

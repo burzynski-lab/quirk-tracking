@@ -12,11 +12,11 @@ S=@SCRATCH@
 export APPTAINER_CACHEDIR=$S/apptainer-cache
 export APPTAINER_TMPDIR=/tmp/$USER-apptainer; mkdir -p $APPTAINER_TMPDIR
 [ -f $S/containers/pixi.sif ] || apptainer pull $S/containers/pixi.sif docker://ghcr.io/prefix-dev/pixi:0.54.1-jammy-cuda-12.8.1 || exit 1
-apptainer exec --nv --bind /ourdisk,/home \
+apptainer exec --nv --bind /ourdisk,/scratch,/home \
   --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
   $S/containers/pixi.sif bash -c "
     pixi config set --global detached-environments $S/envs
     cd $QT/hepattn && pixi install --locked || exit 1
     pixi run python -c 'import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available())'
-  "
+  " || exit 1
 echo ENVDONE

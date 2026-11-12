@@ -21,7 +21,7 @@ DUMPDIR=${DUMPDIR:-/ourdisk/hpc/ouhep/jburzyns/dont_archive/Quirks/chain/gnndump
 G=$S/data/grid_v3
 mkdir -p $G/train $G/val
 export APPTAINER_TMPDIR=/tmp/$USER-apptainer; mkdir -p $APPTAINER_TMPDIR
-run() { apptainer exec --bind /ourdisk,/home --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
+run() { apptainer exec --bind /ourdisk,/scratch,/home --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
         $S/containers/pixi.sif bash -c "cd $QT/hepattn && pixi run python $*"; }
 LAMS=(100 167 278 464 774 1292 2154 3594 5995 10000)
 for li in "${!LAMS[@]}"; do
