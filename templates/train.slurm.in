@@ -9,7 +9,7 @@
 # Train on a prepared dataset (default: the grid_v3 layout under $S/data).
 # Override via --export=ALL,VAR=...:
 #   DATA    dataset root holding train/ val/ test/   (default $S/data/grid_v3)
-#   CONFIG  model config                               (default v2; ODD data: quirks-tracking-odd.yaml)
+#   CONFIG  model config                               (default v2; colliderML data: quirks-tracking-colliderml.yaml)
 #   NAME   Comet experiment name                      (default quirk-train)
 #   EPOCHS  max epochs                                 (default 50)
 #   NGPU    GPUs; also pass --gres=gpu:$NGPU to sbatch (default 1)
