@@ -9,29 +9,37 @@
 # Train on a prepared dataset (default: the grid_v3 layout under $S/data).
 # Override via --export=ALL,VAR=...:
 #   DATA    dataset root holding train/ val/ test/   (default $S/data/grid_v3)
-#   NAME    Comet experiment name                      (default quirk-train)
+#   CONFIG  model config                               (default v2; ODD data: quirks-tracking-odd.yaml)
+#   NAME   Comet experiment name                      (default quirk-train)
 #   EPOCHS  max epochs                                 (default 50)
 #   NGPU    GPUs; also pass --gres=gpu:$NGPU to sbatch (default 1)
 #   EXTRA   extra CLI flags, e.g. "--trainer.fast_dev_run 10" for a smoke test
 QT=@QT@
 S=@SCRATCH@
 DATA=${DATA:-$S/data/grid_v3}
+CONFIG=${CONFIG:-$QT/quirks/configs/quirks-tracking-v2.yaml}
 NAME=${NAME:-quirk-train}
 EPOCHS=${EPOCHS:-50}
 NGPU=${NGPU:-1}
 export APPTAINER_TMPDIR=/tmp/$USER-apptainer; mkdir -p $APPTAINER_TMPDIR
-apptainer exec --nv --bind /ourdisk,/home \
+# Temporary files (dataloader worker sockets, Comet's offline buffer) go to ourdisk, not the
+# node's small shared /tmp: a full /tmp hung job 35736314 in epoch 22. One folder per job.
+export TMPDIR=$S/tmp/$SLURM_JOB_ID; mkdir -p $TMPDIR
+apptainer exec --nv --bind /ourdisk,/scratch,/home \
   --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
   --env COMET_API_KEY=$COMET_API_KEY \
+  --env TMPDIR=$TMPDIR \
   $S/containers/pixi.sif bash -c "
     cd $QT/hepattn
     pixi run python src/hepattn/experiments/trackml/run_tracking.py fit \
-      --config $QT/quirks/configs/quirks-tracking-v2.yaml \
+      --config $CONFIG \
       --name $NAME \
       --data.train_dir $DATA/train --data.val_dir $DATA/val --data.test_dir $DATA/test \
       --data.num_workers 8 \
       --trainer.devices $NGPU --trainer.gradient_clip_val 1.0 --seed_everything 42 \
       --trainer.max_epochs $EPOCHS --trainer.default_root_dir $S/logs $EXTRA
   "
-echo TRAIN_RC=$?
+RC=$?
+rm -rf $TMPDIR
+echo TRAIN_RC=$RC
 echo TRAINDONE
