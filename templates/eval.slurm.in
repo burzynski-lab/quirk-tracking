@@ -53,7 +53,7 @@ echo "data dir:   $DIR"
 echo "eval h5:    $H5"
 
 export APPTAINER_TMPDIR=/tmp/$USER-apptainer; mkdir -p $APPTAINER_TMPDIR
-apptainer exec --nv --bind /ourdisk,/home \
+apptainer exec --nv --bind /ourdisk,/scratch,/home \
   --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
   $S/containers/pixi.sif bash -c "
     cd $QT/hepattn
@@ -67,7 +67,7 @@ RC=$?
 # The data module demands all three dirs, so train/val are pointed at the
 # same place as test; only test_dir is read under the `test` subcommand.
 if [ $RC -eq 0 ] && [ "${PLOTS:-0}" = 1 ]; then
-    apptainer exec --nv --bind /ourdisk,/home \
+    apptainer exec --nv --bind /ourdisk,/scratch,/home \
       --env PIXI_HOME=$S/pixi-home --env PIXI_CACHE_DIR=$S/pixi-cache \
       $S/containers/pixi.sif bash -c "
         cd $QT/hepattn
